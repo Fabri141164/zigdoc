@@ -67,13 +67,17 @@ fn printUsage() !void {
     try stdout_writer.interface.writeAll(
         \\Usage: zigdoc [options] <symbol>
         \\
-        \\Show documentation for a Zig standard library symbol.
+        \\Show documentation for Zig standard library symbols and imported modules.
+        \\
+        \\zigdoc can access any module imported in your build.zig file, making it easy
+        \\to view documentation for third-party dependencies alongside the standard library.
         \\
         \\Examples:
         \\  zigdoc std.ArrayList
         \\  zigdoc std.mem.Allocator
         \\  zigdoc std.http.Server
         \\  zigdoc vaxis.Window
+        \\  zigdoc zeit.timezone.Posix
         \\
         \\Options:
         \\  -h, --help        Show this help message

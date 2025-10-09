@@ -38,14 +38,19 @@ pub fn main() !void {
         \\## Examples
         \\
         \\```bash
+        \\# Standard library symbols
         \\zigdoc std.ArrayList
         \\zigdoc std.mem.Allocator
         \\zigdoc std.http.Server
+        \\
+        \\# Imported modules from build.zig
+        \\zigdoc zeit.timezone.Posix
         \\```
         \\
         \\## Features
         \\
         \\- View documentation for any public symbol in the Zig standard library
+        \\- Access documentation for imported modules from your build.zig
         \\- Shows symbol location, category, and signature
         \\- Displays doc comments and members
         \\- Follows aliases to implementation
