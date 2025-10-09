@@ -267,6 +267,50 @@ fn printMembers(allocator: std.mem.Allocator, writer: anytype, decl: *const Walk
             defer constants.deinit(allocator);
             var types: std.ArrayListUnmanaged([]const u8) = .empty;
             defer types.deinit(allocator);
+            const FieldInfo = struct {
+                name: []const u8,
+                type_str: []const u8,
+                doc_comment: ?std.zig.Ast.TokenIndex,
+            };
+            var fields: std.ArrayListUnmanaged(FieldInfo) = .empty;
+            defer fields.deinit(allocator);
+
+            const ast = decl.file.get_ast();
+
+            if (category == .container) {
+                const node = category.container;
+                var buffer: [2]std.zig.Ast.Node.Index = undefined;
+                if (ast.fullContainerDecl(&buffer, node)) |container_decl| {
+                    for (container_decl.ast.members) |member| {
+                        if (ast.fullContainerField(member)) |field| {
+                            const name_token = field.ast.main_token;
+                            if (ast.tokenTag(name_token) == .identifier) {
+                                const field_name = ast.tokenSlice(name_token);
+
+                                const type_str = if (field.ast.type_expr.unwrap()) |type_expr| blk: {
+                                    const start_token = ast.firstToken(type_expr);
+                                    const end_token = ast.lastToken(type_expr);
+                                    const token_starts = ast.tokens.items(.start);
+                                    const start_offset = token_starts[start_token];
+                                    const end_offset = if (end_token + 1 < ast.tokens.len)
+                                        token_starts[end_token + 1]
+                                    else
+                                        ast.source.len;
+                                    break :blk std.mem.trim(u8, ast.source[start_offset..end_offset], &std.ascii.whitespace);
+                                } else "";
+
+                                const first_doc = Walk.Decl.findFirstDocComment(ast, field.firstToken());
+
+                                try fields.append(allocator, .{
+                                    .name = field_name,
+                                    .type_str = type_str,
+                                    .doc_comment = first_doc.unwrap(),
+                                });
+                            }
+                        }
+                    }
+                }
+            }
 
             // Collect public members
             for (Walk.decls.items) |*candidate| {
@@ -287,6 +331,32 @@ fn printMembers(allocator: std.mem.Allocator, writer: anytype, decl: *const Walk
             }
 
             var has_members = false;
+
+            if (fields.items.len > 0) {
+                try writer.writeAll("\nFields:\n");
+                var prev_had_doc = false;
+                for (fields.items) |field| {
+                    if (prev_had_doc) try writer.writeAll("\n");
+                    if (field.type_str.len > 0) {
+                        try writer.print("  {s}: {s}\n", .{ field.name, field.type_str });
+                    } else {
+                        try writer.print("  {s}\n", .{field.name});
+                    }
+                    if (field.doc_comment) |first_doc| {
+                        var token_idx = first_doc;
+                        var has_any_docs = false;
+                        while (ast.tokenTag(token_idx) == .doc_comment) : (token_idx += 1) {
+                            const comment = ast.tokenSlice(token_idx);
+                            try writer.print("      {s}\n", .{comment[3..]});
+                            has_any_docs = true;
+                        }
+                        prev_had_doc = has_any_docs;
+                    } else {
+                        prev_had_doc = false;
+                    }
+                }
+                has_members = true;
+            }
 
             if (type_functions.items.len > 0) {
                 try writer.writeAll("\nType Functions:\n");
