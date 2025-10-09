@@ -27,7 +27,7 @@ pub fn main() !void {
         \\## Installation
         \\
         \\```bash
-        \\zig build
+        \\zig build install -Doptimize=ReleaseFast --prefix $HOME/.local
         \\```
         \\
         \\## Usage

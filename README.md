@@ -5,7 +5,7 @@ A command-line tool to view documentation for Zig standard library symbols.
 ## Installation
 
 ```bash
-zig build
+zig build install -Doptimize=ReleaseFast --prefix $HOME/.local
 ```
 
 ## Usage
