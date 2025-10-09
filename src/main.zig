@@ -97,7 +97,7 @@ fn dumpImports(arena: *std.heap.ArenaAllocator) !void {
     // Setup the build runner
     try setupBuildRunner(arena);
 
-    // Run zig build with our custom runner with deterministic seed
+    // Run zig build with our custom runner
     const result = try std.process.Child.run(.{
         .allocator = arena.allocator(),
         .argv = &[_][]const u8{
@@ -105,8 +105,6 @@ fn dumpImports(arena: *std.heap.ArenaAllocator) !void {
             "build",
             "--build-runner",
             ".zig-cache/zigdoc_build_runner.zig",
-            "--seed",
-            "0",
         },
     });
 
@@ -166,7 +164,7 @@ fn processBuildZig(arena: *std.heap.ArenaAllocator) !void {
     // Setup the build runner
     try setupBuildRunner(arena);
 
-    // Run zig build with our custom runner with deterministic seed
+    // Run zig build with our custom runner
     const result = try std.process.Child.run(.{
         .allocator = arena.allocator(),
         .argv = &[_][]const u8{
@@ -174,8 +172,6 @@ fn processBuildZig(arena: *std.heap.ArenaAllocator) !void {
             "build",
             "--build-runner",
             ".zig-cache/zigdoc_build_runner.zig",
-            "--seed",
-            "0",
         },
     });
 
@@ -202,6 +198,9 @@ fn parseBuildOutput(allocator: std.mem.Allocator, output: []const u8) !void {
 
         const root_path = module_data.get("root").?.string;
 
+        // Skip non-Zig files (fonts, images, etc.)
+        if (!std.mem.endsWith(u8, root_path, ".zig")) continue;
+
         // Read and add the module file
         const file_content = std.fs.cwd().readFileAlloc(
             allocator,
@@ -221,6 +220,9 @@ fn parseBuildOutput(allocator: std.mem.Allocator, output: []const u8) !void {
             while (imports_iter.next()) |import_entry| {
                 const import_name = import_entry.key_ptr.*;
                 const import_path = import_entry.value_ptr.*.string;
+
+                // Skip non-Zig files (fonts, images, etc.)
+                if (!std.mem.endsWith(u8, import_path, ".zig")) continue;
 
                 // Read and add the imported file
                 const import_content = std.fs.cwd().readFileAlloc(
@@ -306,25 +308,25 @@ fn walkStdLib(arena: *std.heap.ArenaAllocator, std_dir_path: []const u8) !void {
 fn resolveHierarchical(allocator: std.mem.Allocator, symbol: []const u8) !?*Walk.Decl {
     var parts = std.mem.splitScalar(u8, symbol, '.');
     const first_part = parts.next() orelse return null;
-    
+
     // Find the root declaration
     var current_decl: ?*Walk.Decl = null;
     for (Walk.decls.items) |*decl| {
         const info = decl.extra_info();
         if (!info.is_pub) continue;
-        
+
         var fqn_buf: std.ArrayListUnmanaged(u8) = .empty;
         defer fqn_buf.deinit(allocator);
         try decl.fqn(&fqn_buf);
-        
+
         if (std.mem.eql(u8, fqn_buf.items, first_part)) {
             current_decl = decl;
             break;
         }
     }
-    
+
     if (current_decl == null) return null;
-    
+
     // Walk through the remaining parts
     while (parts.next()) |part| {
         // Follow aliases
@@ -334,7 +336,7 @@ fn resolveHierarchical(allocator: std.mem.Allocator, symbol: []const u8) !?*Walk
             search_decl = category.alias.get();
             category = search_decl.categorize();
         }
-        
+
         // Find child with matching name
         var found = false;
         for (Walk.decls.items) |*candidate| {
@@ -348,10 +350,10 @@ fn resolveHierarchical(allocator: std.mem.Allocator, symbol: []const u8) !?*Walk
                 }
             }
         }
-        
+
         if (!found) return null;
     }
-    
+
     return current_decl;
 }
 
@@ -359,7 +361,7 @@ fn printDeclInfo(allocator: std.mem.Allocator, stdout: anytype, decl: *Walk.Decl
     const file_path = decl.file.path();
     const ast = decl.file.get_ast();
     const info = decl.extra_info();
-    
+
     // Print header
     try stdout.print("Symbol: {s}\n", .{symbol});
     const full_path = try getFullPath(allocator, std_dir_path, file_path);
@@ -482,7 +484,7 @@ fn printDocs(allocator: std.mem.Allocator, symbol: []const u8, std_dir_path: []c
         try stdout.flush();
         std.process.exit(1);
     }
-    
+
     try stdout.flush();
 }
 

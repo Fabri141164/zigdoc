@@ -9,7 +9,11 @@ pub const std_options: std.Options = .{
 };
 
 pub fn main() !void {
-    var single_threaded_arena = std.heap.ArenaAllocator.init(std.heap.page_allocator);
+    var gpa_instance = std.heap.GeneralPurposeAllocator(.{}){};
+    defer _ = gpa_instance.deinit();
+    const gpa = gpa_instance.allocator();
+
+    var single_threaded_arena = std.heap.ArenaAllocator.init(gpa);
     defer single_threaded_arena.deinit();
 
     var thread_safe_arena: std.heap.ThreadSafeAllocator = .{
@@ -82,6 +86,9 @@ pub fn main() !void {
         dependencies.root_deps,
     );
 
+    // Initialize install_path - required before calling build()
+    builder.resolveInstallPrefix(null, .{});
+
     // Call the user's build() function
     try builder.runBuild(root);
 
@@ -89,9 +96,9 @@ pub fn main() !void {
     // Instead of executing it, let's dump information about it
 
     // Use a separate allocator for our module collection to avoid interfering with build graph
-    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
-    defer _ = gpa.deinit();
-    const our_allocator = gpa.allocator();
+    var module_gpa = std.heap.GeneralPurposeAllocator(.{}){};
+    defer _ = module_gpa.deinit();
+    const our_allocator = module_gpa.allocator();
 
     const stdout = std.io.getStdOut().writer();
 

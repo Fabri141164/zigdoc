@@ -408,9 +408,15 @@ pub const ModuleIndex = enum(u32) {
 pub fn add_file(file_name: []const u8, bytes: []u8) !File.Index {
     const ast = try parse(file_name, bytes);
     assert(ast.errors.len == 0);
-    const file_index: File.Index = @enumFromInt(files.entries.len);
 
     const normalized_path = std.fs.realpathAlloc(gpa, file_name) catch file_name;
+
+    // Check if this file already exists to avoid duplicate entries
+    if (files.getIndex(normalized_path)) |existing_index| {
+        return @enumFromInt(existing_index);
+    }
+
+    const file_index: File.Index = @enumFromInt(files.entries.len);
     try files.put(gpa, normalized_path, .{ .ast = ast });
 
     var w: Walk = .{
