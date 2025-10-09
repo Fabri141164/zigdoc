@@ -53,8 +53,10 @@ pub fn main() !void {
     const std_file_index = Walk.files.getIndex("std/std.zig") orelse return error.StdNotFound;
     try Walk.modules.put(arena.allocator(), "std", @enumFromInt(std_file_index));
 
-    // Check for build.zig in current directory and process it
-    try processBuildZig(&arena);
+    // Check for build.zig in current directory and process it (skip if querying std library)
+    if (!std.mem.startsWith(u8, symbol.?, "std")) {
+        try processBuildZig(&arena);
+    }
 
     try printDocs(arena.allocator(), symbol.?, std_dir_path);
 }
@@ -297,12 +299,158 @@ fn walkStdLib(arena: *std.heap.ArenaAllocator, std_dir_path: []const u8) !void {
     }
 }
 
+fn resolveHierarchical(allocator: std.mem.Allocator, symbol: []const u8) !?*Walk.Decl {
+    var parts = std.mem.splitScalar(u8, symbol, '.');
+    const first_part = parts.next() orelse return null;
+    
+    // Find the root declaration
+    var current_decl: ?*Walk.Decl = null;
+    for (Walk.decls.items) |*decl| {
+        const info = decl.extra_info();
+        if (!info.is_pub) continue;
+        
+        var fqn_buf: std.ArrayListUnmanaged(u8) = .empty;
+        defer fqn_buf.deinit(allocator);
+        try decl.fqn(&fqn_buf);
+        
+        if (std.mem.eql(u8, fqn_buf.items, first_part)) {
+            current_decl = decl;
+            break;
+        }
+    }
+    
+    if (current_decl == null) return null;
+    
+    // Walk through the remaining parts
+    while (parts.next()) |part| {
+        // Follow aliases
+        var search_decl = current_decl.?;
+        var category = search_decl.categorize();
+        while (category == .alias) {
+            search_decl = category.alias.get();
+            category = search_decl.categorize();
+        }
+        
+        // Find child with matching name
+        var found = false;
+        for (Walk.decls.items) |*candidate| {
+            if (candidate.parent != .none and candidate.parent.get() == search_decl) {
+                const member_info = candidate.extra_info();
+                if (!member_info.is_pub) continue;
+                if (std.mem.eql(u8, member_info.name, part)) {
+                    current_decl = candidate;
+                    found = true;
+                    break;
+                }
+            }
+        }
+        
+        if (!found) return null;
+    }
+    
+    return current_decl;
+}
+
+fn printDeclInfo(allocator: std.mem.Allocator, stdout: anytype, decl: *Walk.Decl, symbol: []const u8, std_dir_path: []const u8) !void {
+    const file_path = decl.file.path();
+    const ast = decl.file.get_ast();
+    const info = decl.extra_info();
+    
+    // Print header
+    try stdout.print("Symbol: {s}\n", .{symbol});
+    const full_path = try getFullPath(allocator, std_dir_path, file_path);
+    defer allocator.free(full_path);
+
+    // Get line number
+    const token_starts = ast.tokens.items(.start);
+    const main_token = ast.nodeMainToken(decl.ast_node);
+    const byte_offset = token_starts[main_token];
+    const loc = std.zig.findLineColumn(ast.source, byte_offset);
+
+    try stdout.print("Location: {s}:{d}\n", .{ full_path, loc.line + 1 });
+
+    // Follow aliases to the actual implementation
+    var target_decl = decl;
+    var category = decl.categorize();
+    while (category == .alias) {
+        const aliasee_index = category.alias;
+        target_decl = aliasee_index.get();
+        category = target_decl.categorize();
+
+        var aliasee_fqn: std.ArrayListUnmanaged(u8) = .empty;
+        defer aliasee_fqn.deinit(allocator);
+        try target_decl.fqn(&aliasee_fqn);
+
+        const aliasee_path = target_decl.file.path();
+        const aliasee_full_path = try getFullPath(allocator, std_dir_path, aliasee_path);
+        defer allocator.free(aliasee_full_path);
+
+        // Get line number for alias target
+        const target_ast = target_decl.file.get_ast();
+        const target_token_starts = target_ast.tokens.items(.start);
+        const target_main_token = target_ast.nodeMainToken(target_decl.ast_node);
+        const target_byte_offset = target_token_starts[target_main_token];
+        const target_loc = std.zig.findLineColumn(target_ast.source, target_byte_offset);
+
+        try stdout.print("Alias Target: {s}\n", .{aliasee_fqn.items});
+        try stdout.print("Target Location: {s}:{d}\n", .{ aliasee_full_path, target_loc.line + 1 });
+    }
+
+    // Print category and signature
+    try stdout.print("Category: {s}\n", .{@tagName(category)});
+    const target_ast = target_decl.file.get_ast();
+    const target_node = target_decl.ast_node;
+    try printSignature(stdout, target_ast, target_decl, category);
+
+    // Print documentation
+    // For file roots, always try to show container doc comments from the target
+    const target_info = target_decl.extra_info();
+    const has_docs = if (target_ast.nodeTag(target_node) == .root)
+        target_info.first_doc_comment.unwrap() != null
+    else
+        info.first_doc_comment.unwrap() != null or target_info.first_doc_comment.unwrap() != null;
+
+    if (has_docs) {
+        try stdout.writeAll("\nDocumentation:\n");
+        if (target_ast.nodeTag(target_node) == .root) {
+            if (target_info.first_doc_comment.unwrap()) |target_first_doc| {
+                try printContainerDocComments(stdout, target_ast, target_first_doc);
+            }
+        } else {
+            // For non-root nodes, prefer original docs, fallback to target
+            if (info.first_doc_comment.unwrap()) |first_doc_comment| {
+                try printDocComments(stdout, ast, first_doc_comment);
+            } else if (target_info.first_doc_comment.unwrap()) |target_first_doc| {
+                try printDocComments(stdout, target_ast, target_first_doc);
+            }
+        }
+    }
+
+    // Print members for namespaces, containers, and type functions
+    const has_members = try printMembers(allocator, stdout, target_decl, category);
+
+    // For type functions without members, show source code instead
+    if (category == .type_function and !has_members) {
+        try stdout.writeAll("\nSource:\n");
+        try printSource(stdout, target_ast, target_node);
+    }
+}
+
 fn printDocs(allocator: std.mem.Allocator, symbol: []const u8, std_dir_path: []const u8) !void {
     var stdout_buf: [4096]u8 = undefined;
     var stdout_writer = std.fs.File.stdout().writer(&stdout_buf);
     const stdout = &stdout_writer.interface;
 
-    // Search for matching declarations
+    // Try hierarchical resolution first (e.g., "zeit.timezone.Posix")
+    if (std.mem.indexOf(u8, symbol, ".")) |_| {
+        if (try resolveHierarchical(allocator, symbol)) |decl| {
+            try printDeclInfo(allocator, stdout, decl, symbol, std_dir_path);
+            try stdout.flush();
+            return;
+        }
+    }
+
+    // Search for matching declarations by FQN
     var found = false;
     for (Walk.decls.items) |*decl| {
         const file_path = decl.file.path();
@@ -320,87 +468,7 @@ fn printDocs(allocator: std.mem.Allocator, symbol: []const u8, std_dir_path: []c
 
         if (std.mem.eql(u8, fqn_buf.items, symbol)) {
             found = true;
-
-            // Print header
-            try stdout.print("Symbol: {s}\n", .{fqn_buf.items});
-            const full_path = try getFullPath(allocator, std_dir_path, file_path);
-            defer allocator.free(full_path);
-
-            // Get line number
-            const token_starts = ast.tokens.items(.start);
-            const main_token = ast.nodeMainToken(decl.ast_node);
-            const byte_offset = token_starts[main_token];
-            const loc = std.zig.findLineColumn(ast.source, byte_offset);
-
-            try stdout.print("Location: {s}:{d}\n", .{ full_path, loc.line + 1 });
-
-            // Follow aliases to the actual implementation
-            var target_decl = decl;
-            var category = decl.categorize();
-            while (category == .alias) {
-                const aliasee_index = category.alias;
-                target_decl = aliasee_index.get();
-                category = target_decl.categorize();
-
-                var aliasee_fqn: std.ArrayListUnmanaged(u8) = .empty;
-                defer aliasee_fqn.deinit(allocator);
-                try target_decl.fqn(&aliasee_fqn);
-
-                const aliasee_path = target_decl.file.path();
-                const aliasee_full_path = try getFullPath(allocator, std_dir_path, aliasee_path);
-                defer allocator.free(aliasee_full_path);
-
-                // Get line number for alias target
-                const target_ast = target_decl.file.get_ast();
-                const target_token_starts = target_ast.tokens.items(.start);
-                const target_main_token = target_ast.nodeMainToken(target_decl.ast_node);
-                const target_byte_offset = target_token_starts[target_main_token];
-                const target_loc = std.zig.findLineColumn(target_ast.source, target_byte_offset);
-
-                try stdout.print("Alias Target: {s}\n", .{aliasee_fqn.items});
-                try stdout.print("Target Location: {s}:{d}\n", .{ aliasee_full_path, target_loc.line + 1 });
-            }
-
-            // Print category and signature
-            try stdout.print("Category: {s}\n", .{@tagName(category)});
-            const target_ast = target_decl.file.get_ast();
-            const target_node = target_decl.ast_node;
-            try printSignature(stdout, target_ast, target_decl, category);
-
-            // Print documentation
-            // For file roots, always try to show container doc comments from the target
-            const target_info = target_decl.extra_info();
-            const has_docs = if (target_ast.nodeTag(target_node) == .root)
-                target_info.first_doc_comment.unwrap() != null
-            else
-                info.first_doc_comment.unwrap() != null or target_info.first_doc_comment.unwrap() != null;
-
-            if (has_docs) {
-                try stdout.writeAll("\nDocumentation:\n");
-                if (target_ast.nodeTag(target_node) == .root) {
-                    if (target_info.first_doc_comment.unwrap()) |target_first_doc| {
-                        try printContainerDocComments(stdout, target_ast, target_first_doc);
-                    }
-                } else {
-                    // For non-root nodes, prefer original docs, fallback to target
-                    if (info.first_doc_comment.unwrap()) |first_doc_comment| {
-                        try printDocComments(stdout, ast, first_doc_comment);
-                    } else if (target_info.first_doc_comment.unwrap()) |target_first_doc| {
-                        try printDocComments(stdout, target_ast, target_first_doc);
-                    }
-                }
-            }
-
-            // Print members for namespaces, containers, and type functions
-            const has_members = try printMembers(allocator, stdout, target_decl, category);
-
-            // For type functions without members, show source code instead
-            if (category == .type_function and !has_members) {
-                try stdout.writeAll("\nSource:\n");
-                try printSource(stdout, target_ast, target_node);
-            }
-
-            try stdout_writer.interface.flush();
+            try printDeclInfo(allocator, stdout, decl, symbol, std_dir_path);
             break;
         }
     }
@@ -410,6 +478,8 @@ fn printDocs(allocator: std.mem.Allocator, symbol: []const u8, std_dir_path: []c
         try stdout.flush();
         std.process.exit(1);
     }
+    
+    try stdout.flush();
 }
 
 fn printMembers(allocator: std.mem.Allocator, writer: anytype, decl: *const Walk.Decl, category: Walk.Category) !bool {
