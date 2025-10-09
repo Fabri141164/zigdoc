@@ -325,18 +325,33 @@ pub const File = struct {
                 if (modules.get(file_path)) |imported_file_index| {
                     return .{ .alias = File.Index.findRootDecl(imported_file_index) };
                 }
-                const base_path = file_index.path();
-                const resolved_path = std.fs.path.resolvePosix(gpa, &.{
-                    base_path, "..", file_path,
-                }) catch @panic("OOM");
-                defer gpa.free(resolved_path);
+
+                const resolved_path = if (std.fs.path.isAbsolute(file_path))
+                    std.fs.realpathAlloc(gpa, file_path) catch file_path
+                else blk: {
+                    const base_path = file_index.path();
+                    break :blk std.fs.path.resolve(gpa, &.{
+                        base_path, "..", file_path,
+                    }) catch @panic("OOM");
+                };
+                defer if (!std.fs.path.isAbsolute(file_path) or resolved_path.ptr != file_path.ptr) gpa.free(resolved_path);
+
                 log.debug("from '{s}' @import '{s}' resolved='{s}'", .{
-                    base_path, file_path, resolved_path,
+                    file_index.path(), file_path, resolved_path,
                 });
                 if (files.getIndex(resolved_path)) |imported_file_index| {
                     return .{ .alias = File.Index.findRootDecl(@enumFromInt(imported_file_index)) };
                 } else {
-                    log.warn("import target '{s}' did not resolve to any file", .{resolved_path});
+                    const import_content = std.fs.cwd().readFileAlloc(gpa, resolved_path, 10 * 1024 * 1024) catch |err| {
+                        log.warn("import target '{s}' could not be read: {}", .{ resolved_path, err });
+                        return .{ .global_const = node };
+                    };
+                    const imported_file_index = add_file(resolved_path, import_content) catch |err| {
+                        log.warn("import target '{s}' could not be parsed: {}", .{ resolved_path, err });
+                        gpa.free(import_content);
+                        return .{ .global_const = node };
+                    };
+                    return .{ .alias = File.Index.findRootDecl(imported_file_index) };
                 }
             } else if (std.mem.eql(u8, builtin_name, "@This")) {
                 if (file_index.get().node_decls.get(node)) |decl_index| {
@@ -394,7 +409,9 @@ pub fn add_file(file_name: []const u8, bytes: []u8) !File.Index {
     const ast = try parse(file_name, bytes);
     assert(ast.errors.len == 0);
     const file_index: File.Index = @enumFromInt(files.entries.len);
-    try files.put(gpa, file_name, .{ .ast = ast });
+
+    const normalized_path = std.fs.realpathAlloc(gpa, file_name) catch file_name;
+    try files.put(gpa, normalized_path, .{ .ast = ast });
 
     var w: Walk = .{
         .file = file_index,

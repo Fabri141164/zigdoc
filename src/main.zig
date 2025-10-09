@@ -370,21 +370,24 @@ fn printDocs(allocator: std.mem.Allocator, symbol: []const u8, std_dir_path: []c
             // Print documentation
             // For file roots, always try to show container doc comments from the target
             const target_info = target_decl.extra_info();
-            try stdout.writeAll("\nDocumentation:\n");
-            if (target_ast.nodeTag(target_node) == .root) {
-                if (target_info.first_doc_comment.unwrap()) |target_first_doc| {
-                    try printContainerDocComments(stdout, target_ast, target_first_doc);
+            const has_docs = if (target_ast.nodeTag(target_node) == .root)
+                target_info.first_doc_comment.unwrap() != null
+            else
+                info.first_doc_comment.unwrap() != null or target_info.first_doc_comment.unwrap() != null;
+
+            if (has_docs) {
+                try stdout.writeAll("\nDocumentation:\n");
+                if (target_ast.nodeTag(target_node) == .root) {
+                    if (target_info.first_doc_comment.unwrap()) |target_first_doc| {
+                        try printContainerDocComments(stdout, target_ast, target_first_doc);
+                    }
                 } else {
-                    try stdout.writeAll("  (No documentation available)\n");
-                }
-            } else {
-                // For non-root nodes, prefer original docs, fallback to target
-                if (info.first_doc_comment.unwrap()) |first_doc_comment| {
-                    try printDocComments(stdout, ast, first_doc_comment);
-                } else if (target_info.first_doc_comment.unwrap()) |target_first_doc| {
-                    try printDocComments(stdout, target_ast, target_first_doc);
-                } else {
-                    try stdout.writeAll("  (No documentation available)\n");
+                    // For non-root nodes, prefer original docs, fallback to target
+                    if (info.first_doc_comment.unwrap()) |first_doc_comment| {
+                        try printDocComments(stdout, ast, first_doc_comment);
+                    } else if (target_info.first_doc_comment.unwrap()) |target_first_doc| {
+                        try printDocComments(stdout, target_ast, target_first_doc);
+                    }
                 }
             }
 
@@ -403,7 +406,7 @@ fn printDocs(allocator: std.mem.Allocator, symbol: []const u8, std_dir_path: []c
     }
 
     if (!found) {
-        try stdout.print("Symbol '{s}' not found in standard library.\n", .{symbol});
+        try stdout.print("Symbol '{s}' not found.\n", .{symbol});
         try stdout.flush();
         std.process.exit(1);
     }
@@ -477,6 +480,16 @@ fn printMembers(allocator: std.mem.Allocator, writer: anytype, decl: *const Walk
                         .function => try functions.append(allocator, member_info.name),
                         .type_function => try type_functions.append(allocator, member_info.name),
                         .namespace, .container => try types.append(allocator, member_info.name),
+                        .alias => {
+                            const aliasee = member_cat.alias.get();
+                            const aliasee_cat = aliasee.categorize();
+                            switch (aliasee_cat) {
+                                .namespace, .container => try types.append(allocator, member_info.name),
+                                .function => try functions.append(allocator, member_info.name),
+                                .type_function => try type_functions.append(allocator, member_info.name),
+                                else => try constants.append(allocator, member_info.name),
+                            }
+                        },
                         .global_const => try constants.append(allocator, member_info.name),
                         else => {},
                     }
@@ -554,6 +567,11 @@ fn printMembers(allocator: std.mem.Allocator, writer: anytype, decl: *const Walk
 }
 
 fn getFullPath(allocator: std.mem.Allocator, std_dir_path: []const u8, file_path: []const u8) ![]const u8 {
+    // If already an absolute path, return as-is
+    if (std.fs.path.isAbsolute(file_path)) {
+        return allocator.dupe(u8, file_path);
+    }
+
     // For "std/..." paths, prepend std_dir_path
     if (std.mem.startsWith(u8, file_path, "std/")) {
         const relative_path = file_path[4..]; // Remove "std/" prefix
