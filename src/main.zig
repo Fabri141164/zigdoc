@@ -40,6 +40,10 @@ pub fn main() !void {
 
     try walkStdLib(&arena, std_dir_path);
 
+    // Register std/std.zig as the "std" module for @import("std")
+    const std_file_index = Walk.files.getIndex("std/std.zig") orelse return error.StdNotFound;
+    try Walk.modules.put(arena.allocator(), "std", @enumFromInt(std_file_index));
+
     try printDocs(arena.allocator(), symbol.?, std_dir_path);
 }
 
@@ -68,6 +72,19 @@ const ZigEnv = struct {
 };
 
 fn getStdDir(arena: *std.heap.ArenaAllocator) ![]const u8 {
+    const version_result = try std.process.Child.run(.{
+        .allocator = arena.allocator(),
+        .argv = &[_][]const u8{ "zig", "version" },
+    });
+
+    if (version_result.term.Exited != 0) {
+        return error.ZigVersionFailed;
+    }
+
+    const version_str = std.mem.trim(u8, version_result.stdout, &std.ascii.whitespace);
+    const version = try std.SemanticVersion.parse(version_str);
+    const is_pre_0_15 = version.order(.{ .major = 0, .minor = 15, .patch = 0 }) == .lt;
+
     const result = try std.process.Child.run(.{
         .allocator = arena.allocator(),
         .argv = &[_][]const u8{ "zig", "env" },
@@ -79,15 +96,24 @@ fn getStdDir(arena: *std.heap.ArenaAllocator) ![]const u8 {
 
     const stdout = try arena.allocator().dupeZ(u8, result.stdout);
 
-    const parsed = try std.zon.parse.fromSlice(
-        ZigEnv,
-        arena.allocator(),
-        stdout,
-        null,
-        .{ .ignore_unknown_fields = true },
-    );
-
-    return parsed.std_dir;
+    if (is_pre_0_15) {
+        const parsed = try std.json.parseFromSlice(
+            ZigEnv,
+            arena.allocator(),
+            stdout,
+            .{ .ignore_unknown_fields = true },
+        );
+        return parsed.value.std_dir;
+    } else {
+        const parsed = try std.zon.parse.fromSlice(
+            ZigEnv,
+            arena.allocator(),
+            stdout,
+            null,
+            .{ .ignore_unknown_fields = true },
+        );
+        return parsed.std_dir;
+    }
 }
 
 fn walkStdLib(arena: *std.heap.ArenaAllocator, std_dir_path: []const u8) !void {
@@ -112,11 +138,7 @@ fn walkStdLib(arena: *std.heap.ArenaAllocator, std_dir_path: []const u8) !void {
             0,
         );
 
-        // Special case: std.zig should be named "std" not "std/std.zig"
-        const file_name = if (std.mem.eql(u8, entry.path, "std.zig"))
-            try allocator.dupe(u8, "std")
-        else
-            try std.fmt.allocPrint(allocator, "std/{s}", .{entry.path});
+        const file_name = try std.fmt.allocPrint(allocator, "std/{s}", .{entry.path});
 
         _ = try Walk.add_file(file_name, file_content);
     }
@@ -309,20 +331,10 @@ fn printMembers(allocator: std.mem.Allocator, writer: anytype, decl: *const Walk
 }
 
 fn getFullPath(allocator: std.mem.Allocator, std_dir_path: []const u8, file_path: []const u8) ![]const u8 {
-    // Special case for "std" -> show "std.zig"
-    if (std.mem.eql(u8, file_path, "std")) {
-        return std.fmt.allocPrint(allocator, "{s}/std.zig", .{std_dir_path});
-    }
-
     // For "std/..." paths, prepend std_dir_path
     if (std.mem.startsWith(u8, file_path, "std/")) {
         const relative_path = file_path[4..]; // Remove "std/" prefix
-        // Check if it already ends with .zig
-        if (std.mem.endsWith(u8, relative_path, ".zig")) {
-            return std.fmt.allocPrint(allocator, "{s}/{s}", .{ std_dir_path, relative_path });
-        } else {
-            return std.fmt.allocPrint(allocator, "{s}/{s}.zig", .{ std_dir_path, relative_path });
-        }
+        return std.fmt.allocPrint(allocator, "{s}/{s}", .{ std_dir_path, relative_path });
     }
 
     // Fallback for any other path
