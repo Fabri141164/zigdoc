@@ -1,6 +1,10 @@
 const std = @import("std");
 const builtin = @import("builtin");
 const Walk = @import("Walk.zig");
+const log = std.log.scoped(.zigdoc);
+
+const build_runner_0_14 = @embedFile("build_runner_0.14.zig");
+const build_runner_0_15 = @embedFile("build_runner_0.15.zig");
 
 pub fn main() !void {
     var debug_allocator: std.heap.DebugAllocator(.{}) = .init;
@@ -33,6 +37,11 @@ pub fn main() !void {
         return;
     }
 
+    if (std.mem.eql(u8, symbol.?, "--dump-imports")) {
+        try dumpImports(&arena);
+        return;
+    }
+
     Walk.init(arena.allocator());
     Walk.Decl.init(arena.allocator());
 
@@ -43,6 +52,9 @@ pub fn main() !void {
     // Register std/std.zig as the "std" module for @import("std")
     const std_file_index = Walk.files.getIndex("std/std.zig") orelse return error.StdNotFound;
     try Walk.modules.put(arena.allocator(), "std", @enumFromInt(std_file_index));
+
+    // Check for build.zig in current directory and process it
+    try processBuildZig(&arena);
 
     try printDocs(arena.allocator(), symbol.?, std_dir_path);
 }
@@ -59,11 +71,48 @@ fn printUsage() !void {
         \\  zigdoc std.ArrayList
         \\  zigdoc std.mem.Allocator
         \\  zigdoc std.http.Server
+        \\  zigdoc vaxis.Window
         \\
         \\Options:
-        \\  -h, --help    Show this help message
+        \\  -h, --help        Show this help message
+        \\  --dump-imports    Dump module imports from build.zig as JSON
         \\
     );
+    try stdout_writer.interface.flush();
+}
+
+fn dumpImports(arena: *std.heap.ArenaAllocator) !void {
+    // Check if build.zig exists
+    std.fs.cwd().access("build.zig", .{}) catch {
+        std.debug.print("No build.zig found in current directory\n", .{});
+        return error.NoBuildZig;
+    };
+
+    // Setup the build runner
+    try setupBuildRunner(arena);
+
+    // Run zig build with our custom runner with deterministic seed
+    const result = try std.process.Child.run(.{
+        .allocator = arena.allocator(),
+        .argv = &[_][]const u8{
+            "zig",
+            "build",
+            "--build-runner",
+            ".zig-cache/zigdoc_build_runner.zig",
+            "--seed",
+            "0",
+        },
+    });
+
+    if (result.term.Exited != 0) {
+        std.debug.print("Error running build runner:\n{s}\n", .{result.stderr});
+        return error.BuildRunnerFailed;
+    }
+
+    // Print the JSON output directly
+    var stdout_buf: [4096]u8 = undefined;
+    var stdout_writer = std.fs.File.stdout().writer(&stdout_buf);
+    try stdout_writer.interface.writeAll(result.stdout);
     try stdout_writer.interface.flush();
 }
 
@@ -71,7 +120,7 @@ const ZigEnv = struct {
     std_dir: []const u8,
 };
 
-fn getStdDir(arena: *std.heap.ArenaAllocator) ![]const u8 {
+fn getZigVersion(arena: *std.heap.ArenaAllocator) !std.SemanticVersion {
     const version_result = try std.process.Child.run(.{
         .allocator = arena.allocator(),
         .argv = &[_][]const u8{ "zig", "version" },
@@ -82,7 +131,111 @@ fn getStdDir(arena: *std.heap.ArenaAllocator) ![]const u8 {
     }
 
     const version_str = std.mem.trim(u8, version_result.stdout, &std.ascii.whitespace);
-    const version = try std.SemanticVersion.parse(version_str);
+    return try std.SemanticVersion.parse(version_str);
+}
+
+fn setupBuildRunner(arena: *std.heap.ArenaAllocator) !void {
+    const version = try getZigVersion(arena);
+
+    const runner_src = switch (version.minor) {
+        14 => build_runner_0_14,
+        15 => build_runner_0_15,
+        else => return error.UnsupportedZigVersion,
+    };
+
+    const runner_path = ".zig-cache/zigdoc_build_runner.zig";
+    try std.fs.cwd().writeFile(.{
+        .sub_path = runner_path,
+        .data = runner_src,
+    });
+}
+
+fn processBuildZig(arena: *std.heap.ArenaAllocator) !void {
+    // Check if build.zig exists
+    std.fs.cwd().access("build.zig", .{}) catch {
+        // No build.zig, nothing to do
+        return;
+    };
+
+    // Setup the build runner
+    try setupBuildRunner(arena);
+
+    // Run zig build with our custom runner with deterministic seed
+    const result = try std.process.Child.run(.{
+        .allocator = arena.allocator(),
+        .argv = &[_][]const u8{
+            "zig",
+            "build",
+            "--build-runner",
+            ".zig-cache/zigdoc_build_runner.zig",
+            "--seed",
+            "0",
+        },
+    });
+
+    if (result.term.Exited != 0) {
+        log.err("Failed to analyze build.zig", .{});
+        return;
+    }
+
+    // Parse the output to extract module information
+    try parseBuildOutput(arena.allocator(), result.stdout);
+}
+
+fn parseBuildOutput(allocator: std.mem.Allocator, output: []const u8) !void {
+    const parsed = try std.json.parseFromSlice(std.json.Value, allocator, output, .{});
+    defer parsed.deinit();
+
+    const root_obj = parsed.value.object;
+    const modules_obj = root_obj.get("modules") orelse return;
+
+    var modules_iter = modules_obj.object.iterator();
+    while (modules_iter.next()) |entry| {
+        const module_name = entry.key_ptr.*;
+        const module_data = entry.value_ptr.*.object;
+
+        const root_path = module_data.get("root").?.string;
+
+        // Read and add the module file
+        const file_content = std.fs.cwd().readFileAlloc(
+            allocator,
+            root_path,
+            10 * 1024 * 1024,
+        ) catch |err| {
+            std.debug.print("Failed to read module {s}: {}\n", .{ module_name, err });
+            continue;
+        };
+
+        const file_index = try Walk.add_file(root_path, file_content);
+        try Walk.modules.put(allocator, module_name, file_index);
+
+        // Handle imports if present
+        if (module_data.get("imports")) |imports_obj| {
+            var imports_iter = imports_obj.object.iterator();
+            while (imports_iter.next()) |import_entry| {
+                const import_name = import_entry.key_ptr.*;
+                const import_path = import_entry.value_ptr.*.string;
+
+                // Read and add the imported file
+                const import_content = std.fs.cwd().readFileAlloc(
+                    allocator,
+                    import_path,
+                    10 * 1024 * 1024,
+                ) catch |err| {
+                    std.debug.print("Failed to read import {s}: {}\n", .{ import_name, err });
+                    continue;
+                };
+
+                const import_file_index = try Walk.add_file(import_path, import_content);
+                try Walk.modules.put(allocator, import_name, import_file_index);
+            }
+        }
+    }
+}
+
+fn getStdDir(arena: *std.heap.ArenaAllocator) ![]const u8 {
+    const version = try getZigVersion(arena);
+
     const is_pre_0_15 = version.order(.{ .major = 0, .minor = 15, .patch = 0 }) == .lt;
 
     const result = try std.process.Child.run(.{

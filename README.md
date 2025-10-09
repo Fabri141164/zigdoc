@@ -19,9 +19,11 @@ Examples:
   zigdoc std.ArrayList
   zigdoc std.mem.Allocator
   zigdoc std.http.Server
+  zigdoc vaxis.Window
 
 Options:
-  -h, --help    Show this help message
+  -h, --help        Show this help message
+  --dump-imports    Dump module imports from build.zig as JSON
 ```
 
 ## Examples
