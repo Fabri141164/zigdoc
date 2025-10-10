@@ -47,14 +47,15 @@ pub fn main() !void {
 
     const std_dir_path = try getStdDir(&arena);
 
-    try walkStdLib(&arena, std_dir_path);
+    // Only parse std library if the symbol starts with "std"
+    if (std.mem.startsWith(u8, symbol.?, "std")) {
+        try walkStdLib(&arena, std_dir_path);
 
-    // Register std/std.zig as the "std" module for @import("std")
-    const std_file_index = Walk.files.getIndex("std/std.zig") orelse return error.StdNotFound;
-    try Walk.modules.put(arena.allocator(), "std", @enumFromInt(std_file_index));
-
-    // Check for build.zig in current directory and process it (skip if querying std library)
-    if (!std.mem.startsWith(u8, symbol.?, "std")) {
+        // Register std/std.zig as the "std" module for @import("std")
+        const std_file_index = Walk.files.getIndex("std/std.zig") orelse return error.StdNotFound;
+        try Walk.modules.put(arena.allocator(), "std", @enumFromInt(std_file_index));
+    } else {
+        // For non-std symbols, process build.zig to get imported modules
         try processBuildZig(&arena);
     }
 
