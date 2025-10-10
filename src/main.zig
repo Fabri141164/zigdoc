@@ -147,6 +147,11 @@ fn setupBuildRunner(arena: *std.heap.ArenaAllocator) !void {
         else => return error.UnsupportedZigVersion,
     };
 
+    std.fs.cwd().makeDir(".zig-cache") catch |err| switch (err) {
+        error.PathAlreadyExists => {},
+        else => return err,
+    };
+
     const runner_path = ".zig-cache/zigdoc_build_runner.zig";
     try std.fs.cwd().writeFile(.{
         .sub_path = runner_path,
