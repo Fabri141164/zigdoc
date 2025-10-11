@@ -551,30 +551,76 @@ fn printMembers(allocator: std.mem.Allocator, writer: anytype, decl: *const Walk
             }
 
             // Collect public members
-            for (Walk.decls.items) |*candidate| {
-                if (candidate.parent != .none and candidate.parent.get() == decl) {
-                    const member_info = candidate.extra_info();
-                    if (!member_info.is_pub) continue;
-                    if (member_info.name.len == 0) continue;
+            // Note: We iterate by index because calling categorize() can trigger file loading
+            // which appends to Walk.decls.items, invalidating slice references
+            var i: usize = 0;
+            // Find the index of the target decl to avoid pointer comparison issues
+            // (pointers can become invalid when Walk.decls.items is reallocated)
+            const target_decl_idx: usize = blk: {
+                for (Walk.decls.items, 0..) |*d, idx| {
+                    if (d == decl) break :blk idx;
+                }
+                @panic("decl not found in Walk.decls.items");
+            };
 
-                    const member_cat = candidate.categorize();
-                    switch (member_cat) {
-                        .function => try functions.append(allocator, member_info.name),
-                        .type_function => try type_functions.append(allocator, member_info.name),
-                        .namespace, .container => try types.append(allocator, member_info.name),
-                        .alias => {
-                            const aliasee = member_cat.alias.get();
-                            const aliasee_cat = aliasee.categorize();
-                            switch (aliasee_cat) {
-                                .namespace, .container => try types.append(allocator, member_info.name),
-                                .function => try functions.append(allocator, member_info.name),
-                                .type_function => try type_functions.append(allocator, member_info.name),
-                                else => try constants.append(allocator, member_info.name),
-                            }
-                        },
-                        .global_const => try constants.append(allocator, member_info.name),
-                        else => {},
+            var checked: usize = 0;
+            var matched_parent: usize = 0;
+            while (i < Walk.decls.items.len) : (i += 1) {
+                const candidate = &Walk.decls.items[i];
+                checked += 1;
+                // Validate parent index before using it
+                if (candidate.parent != .none) {
+                    const pidx = @intFromEnum(candidate.parent);
+                    if (pidx >= Walk.decls.items.len) {
+                        continue; // Skip invalid parent
                     }
+                    // Compare parent index instead of pointer to avoid stale pointer issues
+                    if (pidx != target_decl_idx) {
+                        continue;
+                    }
+                    matched_parent += 1;
+                } else {
+                    continue; // No parent
+                }
+
+                const member_info = candidate.extra_info();
+                if (!member_info.is_pub) continue;
+                if (member_info.name.len == 0) continue;
+
+                const member_cat = candidate.categorize();
+                switch (member_cat) {
+                    .function => try functions.append(allocator, member_info.name),
+                    .type_function => try type_functions.append(allocator, member_info.name),
+                    .namespace, .container => try types.append(allocator, member_info.name),
+                    .alias => |alias_index| {
+                        // Follow alias chain to get the final category
+                        // Guard against invalid alias indices
+                        const idx = @intFromEnum(alias_index);
+                        if (alias_index == .none or idx >= Walk.decls.items.len) {
+                            // Invalid alias, treat as constant
+                            try constants.append(allocator, member_info.name);
+                            continue;
+                        }
+
+                        var resolved_index = alias_index;
+                        var hops: usize = 0;
+                        var resolved_cat = resolved_index.get().categorize();
+                        while (resolved_cat == .alias and hops < 64) : (hops += 1) {
+                            const next_index = resolved_cat.alias;
+                            const next_idx = @intFromEnum(next_index);
+                            if (next_index == .none or next_idx >= Walk.decls.items.len) break;
+                            resolved_index = next_index;
+                            resolved_cat = resolved_index.get().categorize();
+                        }
+                        switch (resolved_cat) {
+                            .namespace, .container => try types.append(allocator, member_info.name),
+                            .function => try functions.append(allocator, member_info.name),
+                            .type_function => try type_functions.append(allocator, member_info.name),
+                            else => try constants.append(allocator, member_info.name),
+                        }
+                    },
+                    .global_const => try constants.append(allocator, member_info.name),
+                    else => {},
                 }
             }
 

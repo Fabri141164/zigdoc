@@ -27,7 +27,9 @@ pub const Index = enum(u32) {
     _,
 
     pub fn get(i: Index) *Decl {
-        return &Walk.decls.items[@intFromEnum(i)];
+        const raw = @intFromEnum(i);
+        assert(raw < Walk.decls.items.len);
+        return &Walk.decls.items[raw];
     }
 };
 
@@ -122,12 +124,23 @@ pub fn categorize(decl: *const Decl) Walk.Category {
 /// Looks up a direct child of `decl` by name.
 pub fn get_child(decl: *const Decl, name: []const u8) ?Decl.Index {
     switch (decl.categorize()) {
-        .alias => |aliasee| return aliasee.get().get_child(name),
+        .alias => |aliasee| {
+            // Guard against invalid aliases
+            const idx = @intFromEnum(aliasee);
+            if (aliasee == .none or idx >= Walk.decls.items.len) return null;
+            return aliasee.get().get_child(name);
+        },
         .namespace, .container => |node| {
             const file = decl.file.get();
             const scope = file.scopes.get(node) orelse return null;
             const child_node = scope.get_child(name) orelse return null;
-            return file.node_decls.get(child_node);
+            const result = file.node_decls.get(child_node);
+            // Validate the result before returning
+            if (result) |r| {
+                const ridx = @intFromEnum(r);
+                if (r != .none and ridx < Walk.decls.items.len) return r;
+            }
+            return null;
         },
         .type_function => {
             // Find a decl with this function as the parent, with a name matching `name`

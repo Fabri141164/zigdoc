@@ -42,6 +42,15 @@ pub const Category = union(enum(u8)) {
     type_function: Ast.Node.Index,
 
     pub const Tag = @typeInfo(Category).@"union".tag_type.?;
+
+    /// Safely create an alias category, returns global_const if index is invalid
+    pub fn makeAlias(decl_index: Decl.Index, fallback_node: Ast.Node.Index) Category {
+        const idx = @intFromEnum(decl_index);
+        if (decl_index == .none or idx >= decls.items.len) {
+            return .{ .global_const = fallback_node };
+        }
+        return .{ .alias = decl_index };
+    }
 };
 
 pub const File = struct {
@@ -210,7 +219,9 @@ pub const File = struct {
 
                     if (file.ident_decls.get(name_token)) |decl_node| {
                         const decl_index = file.node_decls.get(decl_node) orelse .none;
-                        if (decl_index != .none) return .{ .alias = decl_index };
+                        if (decl_index != .none) {
+                            return Category.makeAlias(decl_index, node);
+                        }
                         return categorize_decl(file_index, decl_node);
                     }
 
@@ -223,7 +234,7 @@ pub const File = struct {
 
                     switch (categorize_expr(file_index, object_node)) {
                         .alias => |aliasee| if (aliasee.get().get_child(field_name)) |decl_index| {
-                            return .{ .alias = decl_index };
+                            return Category.makeAlias(decl_index, node);
                         },
                         else => {},
                     }
@@ -323,7 +334,7 @@ pub const File = struct {
                 const file_path = std.zig.string_literal.parseAlloc(gpa, str_bytes) catch @panic("OOM");
                 defer gpa.free(file_path);
                 if (modules.get(file_path)) |imported_file_index| {
-                    return .{ .alias = File.Index.findRootDecl(imported_file_index) };
+                    return Category.makeAlias(File.Index.findRootDecl(imported_file_index), node);
                 }
 
                 const resolved_path = if (std.fs.path.isAbsolute(file_path))
@@ -340,7 +351,7 @@ pub const File = struct {
                     file_index.path(), file_path, resolved_path,
                 });
                 if (files.getIndex(resolved_path)) |imported_file_index| {
-                    return .{ .alias = File.Index.findRootDecl(@enumFromInt(imported_file_index)) };
+                    return Category.makeAlias(File.Index.findRootDecl(@enumFromInt(imported_file_index)), node);
                 } else {
                     const import_content = std.fs.cwd().readFileAlloc(gpa, resolved_path, 10 * 1024 * 1024) catch |err| {
                         log.warn("import target '{s}' could not be read: {}", .{ resolved_path, err });
@@ -351,11 +362,11 @@ pub const File = struct {
                         gpa.free(import_content);
                         return .{ .global_const = node };
                     };
-                    return .{ .alias = File.Index.findRootDecl(imported_file_index) };
+                    return Category.makeAlias(File.Index.findRootDecl(imported_file_index), node);
                 }
             } else if (std.mem.eql(u8, builtin_name, "@This")) {
                 if (file_index.get().node_decls.get(node)) |decl_index| {
-                    return .{ .alias = decl_index };
+                    return Category.makeAlias(decl_index, node);
                 } else {
                     log.warn("@This() is missing link to Decl.Index", .{});
                 }
