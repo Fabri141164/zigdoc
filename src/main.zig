@@ -492,7 +492,45 @@ fn printDocs(allocator: std.mem.Allocator, symbol: []const u8, std_dir_path: []c
     }
 
     if (!found) {
-        try stdout.print("Symbol '{s}' not found.\n", .{symbol});
+        try stdout.writeAll("Symbol not found: ");
+        try stdout.print("'{s}'\n\n", .{symbol});
+
+        // Provide helpful suggestions
+        var parts = std.mem.splitScalar(u8, symbol, '.');
+        const first_part = parts.next() orelse {
+            try stdout.writeAll("Tip: Specify a symbol like 'std.ArrayList' or 'moduleName.Symbol'\n");
+            try stdout.flush();
+            std.process.exit(1);
+        };
+
+        // Check if the module exists
+        const module_exists = blk: {
+            for (Walk.decls.items) |*decl| {
+                var fqn_buf: std.ArrayListUnmanaged(u8) = .empty;
+                defer fqn_buf.deinit(allocator);
+                try decl.fqn(&fqn_buf);
+                if (std.mem.eql(u8, fqn_buf.items, first_part)) break :blk true;
+            }
+            break :blk false;
+        };
+
+        if (!module_exists) {
+            try stdout.print("Module '{s}' not found.\n", .{first_part});
+            if (Walk.modules.count() > 0) {
+                try stdout.writeAll("\nAvailable modules:\n");
+                var iter = Walk.modules.iterator();
+                while (iter.next()) |entry| {
+                    try stdout.print("  {s}\n", .{entry.key_ptr.*});
+                }
+            }
+        } else {
+            try stdout.print("The symbol exists in module '{s}' but could not find '{s}'.\n", .{ first_part, symbol });
+            try stdout.writeAll("Possible reasons:\n");
+            try stdout.writeAll("  - The symbol is private (not marked with 'pub')\n");
+            try stdout.writeAll("  - The symbol name is misspelled\n");
+            try stdout.writeAll("  - The symbol is nested deeper than specified\n");
+        }
+
         try stdout.flush();
         std.process.exit(1);
     }
