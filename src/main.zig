@@ -335,10 +335,16 @@ fn resolveHierarchical(allocator: std.mem.Allocator, symbol: []const u8) !?*Walk
 
     // Walk through the remaining parts
     while (parts.next()) |part| {
-        // Follow aliases
+        // Follow aliases with circular reference protection
         var search_decl = current_decl.?;
         var category = search_decl.categorize();
+        var hop_count: usize = 0;
         while (category == .alias) {
+            hop_count += 1;
+            if (hop_count >= 64) {
+                log.err("Circular alias detected resolving '{s}'", .{symbol});
+                return error.CircularAlias;
+            }
             search_decl = category.alias.get();
             category = search_decl.categorize();
         }
