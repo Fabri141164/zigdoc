@@ -524,7 +524,7 @@ fn printDocs(allocator: std.mem.Allocator, symbol: []const u8, std_dir_path: []c
                 }
             }
         } else {
-            try stdout.print("The symbol exists in module '{s}' but could not find '{s}'.\n", .{ first_part, symbol });
+            try stdout.print("Module '{s}' found, but could not find symbol '{s}'.\n", .{ first_part, symbol });
             try stdout.writeAll("Possible reasons:\n");
             try stdout.writeAll("  - The symbol is private (not marked with 'pub')\n");
             try stdout.writeAll("  - The symbol name is misspelled\n");
